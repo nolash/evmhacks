@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
 	"math"
 	"math/big"
@@ -16,7 +17,20 @@ import (
 )
 
 var (
-	balance = big.NewInt(int64(math.Pow(2, 7)))
+	// bytecode is generated from this assembly code
+	// (push value 10 (dec, int32, big endian) to offset 20 (dec)
+	// store to memory
+	// retrieve 1 byte at offset 20 + 32 - 1
+	// return value (10)
+	//	main:
+	//		push 10
+	//		push 20
+	//		mstore
+	//		push 1
+	//		push 51
+	//		return
+	bytecode = common.FromHex("0x5b600a60145260016033f3")
+	balance  = big.NewInt(int64(math.Pow(2, 7)))
 )
 
 func main() {
@@ -27,22 +41,9 @@ func main() {
 		log.Error(err.Error())
 		os.Exit(1)
 	}
-
-	// set up database
-	//	dbdir, err := ioutil.TempDir("", "sqlite-evmhack-")
-	//	if err != nil {
-	//		log.Error(err.Error())
-	//		os.Exit(1)
-	//	}
-	//	defer os.RemoveAll(dbdir)
-	//	db, err := ethdb.NewLDBDatabase(dbdir, 20, 4)
-	//	if err != nil {
-	//		log.Error(err.Error())
-	//		os.Exit(1)
-	//	}
+	addr := crypto.PubkeyToAddress(privkey.PublicKey)
 
 	// set up backend
-	//genesis := GenesisBlockForTesting(db, addr, &balance)
 	auth := bind.NewKeyedTransactor(privkey)
 	alloc := make(core.GenesisAlloc, 1)
 	alloc[auth.From] = core.GenesisAccount{
@@ -51,6 +52,7 @@ func main() {
 	}
 	sim := backends.NewSimulatedBackend(alloc)
 
+	// create the evm interpreter
 	ctx := vm.Context{
 		CanTransfer: func(state vm.StateDB, addr common.Address, amount *big.Int) bool {
 			return false
@@ -62,8 +64,19 @@ func main() {
 			return common.StringToHash("foo")
 		},
 	}
+	evm := vm.NewEVM(ctx, sim.State(), sim.Config(), vm.Config{})
+	ipr := vm.NewInterpreter(evm, vm.Config{})
 
-	e := vm.NewEVM(ctx, sim.State(), sim.Config(), vm.Config{})
+	// set up and run contract
+	ct := vm.NewContract(vm.AccountRef(addr), vm.AccountRef(addr), big.NewInt(0), 2000000)
+	ct.SetCallCode(&addr, crypto.Keccak256Hash(bytecode), bytecode)
+	r, err := ipr.Run(0, ct, []byte{})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, err.Error())
+	}
 
-	fmt.Printf("%v\n", e)
+	// check result
+	if !bytes.Equal(r, []byte{0x0a}) {
+		fmt.Fprintf(os.Stderr, "expected [0x0a], got %v", r)
+	}
 }
