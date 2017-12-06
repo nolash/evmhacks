@@ -1,11 +1,13 @@
 package main
 
 import (
-	"bytes"
+	//"bytes"
+	"context"
 	"fmt"
 	"math"
 	"math/big"
 	"os"
+	"time"
 
 	"github.com/ethereum/go-ethereum/accounts/abi/bind"
 	"github.com/ethereum/go-ethereum/accounts/abi/bind/backends"
@@ -29,9 +31,17 @@ var (
 	//		push 1
 	//		push 51
 	//		return
-	bytecode = common.FromHex("0x5b600a60145260016033f3")
+	//bytecode = common.FromHex("0x5b600a60145260016033f3")
+	//bytecode = common.FromHex("5b600035801563000000145760205260206020f35b60017ff0000000000000000000000000000000000000000000000000000000000000001760005260206000f3")
+	bytecode = common.FromHex("5b60003560005560005460005260046000f300")
 	balance  = big.NewInt(int64(math.Pow(2, 7)))
 )
+
+func init() {
+	//log.StreamHandler(os.Stderr, nil)
+	h := log.LvlFilterHandler(log.LvlTrace, log.StdoutHandler)
+	log.Root().SetHandler(h)
+}
 
 func main() {
 
@@ -55,7 +65,7 @@ func main() {
 	// create the evm interpreter
 	ctx := vm.Context{
 		CanTransfer: func(state vm.StateDB, addr common.Address, amount *big.Int) bool {
-			return false
+			return true
 		},
 		Transfer: func(state vm.StateDB, laddr common.Address, raddr common.Address, amount *big.Int) {
 			return
@@ -65,18 +75,29 @@ func main() {
 		},
 	}
 	evm := vm.NewEVM(ctx, sim.State(), sim.Config(), vm.Config{})
-	ipr := vm.NewInterpreter(evm, vm.Config{})
+	_ = vm.NewInterpreter(evm, vm.Config{})
 
 	// set up and run contract
 	ct := vm.NewContract(vm.AccountRef(addr), vm.AccountRef(addr), big.NewInt(0), 2000000)
 	ct.SetCallCode(&addr, crypto.Keccak256Hash(bytecode), bytecode)
-	r, err := ipr.Run(0, ct, []byte{})
+	lctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	p, err := sim.PendingCodeAt(lctx, addr)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, err.Error())
+		fmt.Fprintf(os.Stderr, "error: %v", err.Error())
+		os.Exit(1)
 	}
+	//r, err := ipr.Run(0, ct, []byte{0xde, 0xad, 0xbe, 0xef})
+	r, g, err := evm.Call(vm.AccountRef(addr), ct.Address(), []byte{0xde, 0xad, 0xbe, 0xef}, 2000000, big.NewInt(0))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v", err.Error())
+		os.Exit(1)
+	}
+	sim.Commit()
 
+	fmt.Fprintf(os.Stdout, "return: %x\nleftovergas: %d\npending%d\n", r, g, p)
 	// check result
-	if !bytes.Equal(r, []byte{0x0a}) {
-		fmt.Fprintf(os.Stderr, "expected [0x0a], got %v", r)
-	}
+	//	if !bytes.Equal(r, []byte{0x0a}) {
+	//		fmt.Fprintf(os.Stderr, "expected [0x0a], got %v", r)
+	//	}
 }
